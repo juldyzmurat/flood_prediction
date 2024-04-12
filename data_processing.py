@@ -149,3 +149,273 @@ df_hydro_ice.isnull().sum()
 df_hydro_ice.to_csv("./data/ekidin_hydro_ice.csv", index =False, header = True)
 
 # %%
+#plot Ekidin percipation data 
+import pandas as pd 
+import numpy as np 
+import matplotlib.pyplot as plt
+
+df = pd.read_csv("./data/ekidin_hydro_ice.csv")
+df[df['osadkiСумма'] == " "]
+
+plt.figure(figsize=(10, 6))  # Set figure size
+plt.plot(df['Дата'], np.where(df['osadkiСумма'].notnull(), 1, np.nan), '|', color='blue')
+
+plt.title('Ekidin Precipitation Data')
+plt.xlabel('Date')
+plt.ylabel('Presence of Precipitation')
+
+plt.show()
+
+#%%
+#we see that the missing data does not correpsond to only summer time 
+#let us see if there are values of 0 
+df[df['osadkiСумма'] == 0]
+# %%
+#turns out there are 0 values, hence, the missin values are not 0 
+# Find the longest consecutive missing data time frame for osadkiСумма
+missing_data = df[df['osadkiСумма'].isnull()]
+missing_data['Дата'] = pd.to_datetime(missing_data['Дата'])
+missing_data['diff'] = (missing_data['Дата'] - missing_data['Дата'].shift(1)).dt.days
+missing_periods = missing_data.groupby((missing_data['diff'] != 1).cumsum()).size()
+
+plt.hist(missing_periods, bins=10)
+
+plt.xlabel('Length of Missing Periods')
+plt.ylabel('Frequency')
+plt.title('Distribution of Missing Period Lengths')
+plt.show()
+
+
+# %%
+# Create a DataFrame with the histogram values
+hist_values = pd.DataFrame({'Length of Missing Periods': missing_periods.values, 'Frequency': missing_periods.index})
+hist_values = hist_values.reset_index(drop=True)
+hist_values
+# %%
+#let us see if there is going to be a lot of values missing if we use other stations 
+# Combine all files from st-gnn-other-locs into one DataFrame
+import pandas as pd
+import os
+
+directory = "/Users/zhuldyzualikhankyzy/Documents/GitHub/flood_prediciton/data/st-gnn-other-locs"
+df_combined = pd.DataFrame()
+
+df_combined["Дата"] = pd.date_range(start='2007-01-01', end='2024-01-31', freq='D')
+print(df_combined["Дата"])
+
+#%%
+# Loop through each file in the directory
+for file in os.listdir(directory):
+    if file.endswith(".xlsx"):  # Check if the file is an Excel file
+        file_path = os.path.join(directory, file)
+        df = pd.read_excel(file_path, skiprows=2)  # Read the file
+        # Rename the 'Сумма' column to include the station name for uniqueness
+        station_name = df["Станция"].iloc[0]  # Assuming the station name is constant per file
+        df = df[["Дата", "Сумма"]]
+        df.columns = ["Дата", station_name]
+        # Merge or initialize the combined DataFrame
+        df_combined = df_combined.merge(df, on="Дата", how="left")
+
+# Check the combined DataFrame
+df_combined
+
+#%%
+#add the values of ekidin 
+df_ekidin = pd.read_csv("/Users/zhuldyzualikhankyzy/Documents/GitHub/flood_prediciton/data/ekidin/ekidin_osadki.csv",skiprows=2)
+# Rename the 'Сумма' column to include the station name for uniqueness
+station_name = df_ekidin["Станция"].iloc[0]  # Assuming the station name is constant per file
+df_ekidin = df_ekidin[["Дата", "Сумма"]]
+df_ekidin.columns = ["Дата", station_name]
+df_ekidin['Дата'] = pd.to_datetime(df_ekidin['Дата'], errors='coerce')
+# Convert 'Дата' to a string in the format 'YYYY-MM-DD', handling any NaT values which turn into NaN
+df_ekidin['Дата'] = df_ekidin['Дата'].astype(str)
+
+df_ekidin['Дата'] = pd.to_datetime(df_ekidin['Дата'], errors='coerce')
+df_combined['Дата'] = pd.to_datetime(df_combined['Дата'], errors='coerce')
+
+df_combined = df_combined.merge(df_ekidin, on="Дата", how="left")
+df_combined.to_csv("./data/5locs_percip.csv", index =False, header = True)
+
+#%%
+#impute the values of one day missingness with three day average 
+import pandas as pd
+import numpy as np
+
+def impute_small_gaps(df, max_gap_length=3):
+    # Process each column separately
+    for column in df.columns:
+        # Skip the 'Дата' column or any non-numeric column
+        if df[column].dtype == 'object' or column == 'Дата':
+            continue
+        
+        # Detect consecutive NaNs and their indices
+        nans = df[column].isna()
+        fill_value = None
+        
+        for i in range(len(df)):
+            # Start of NaN sequence
+            if nans.iloc[i] and (i == 0 or not nans.iloc[i - 1]):
+                start = i
+            
+            # End of NaN sequence
+            if nans.iloc[i] and (i == len(df) - 1 or not nans.iloc[i + 1]):
+                end = i
+                if (end - start) <= max_gap_length:
+                    # Indices for two days before and after the gap
+                    before_indices = [idx for idx in range(start-2, start) if idx >= 0]
+                    after_indices = [idx for idx in range(end+1, end+3) if idx < len(df)]
+                    relevant_indices = before_indices + after_indices
+                    
+                    # Calculate mean excluding NaNs
+                    relevant_values = df.iloc[relevant_indices][column].dropna()
+                    if not relevant_values.empty:
+                        fill_value = relevant_values.mean()
+                    
+                    # Fill the gap if a mean was calculable
+                    if fill_value is not None:
+                        df.loc[start:end+1, column] = df.loc[start:end+1, column].fillna(fill_value)
+    
+    return df
+
+imputed_df = impute_small_gaps(df_combined, 3)
+print(imputed_df)
+#%%
+#we want to find the longest connsequtive time frame without any missing data across all 5 locations 
+def longest_non_nan_window(df, columns):
+    max_length = 0
+    current_length = 0
+    start_date = None
+    end_date = None
+    longest_window = None
+
+    # Iterate over the DataFrame rows
+    for idx, row in df.iterrows():
+        # Check if all columns in this row are not NaN
+        if all([pd.notna(row[col]) for col in columns]):
+            current_length += 1
+            if current_length == 1:  # Mark the start of a new non-NaN window
+                start_date = row['Дата']
+            end_date = row['Дата']  # Update the end date of the current window
+
+            # Update the longest window found so far
+            if current_length > max_length:
+                max_length = current_length
+                longest_window = (start_date, end_date)
+        else:
+            current_length = 0  # Reset current window length
+
+    return longest_window, max_length
+
+columns_to_check = ['Екидин']
+
+# Get the longest window
+longest_window, max_length = longest_non_nan_window(imputed_df, columns_to_check)
+# %%
+##in this case, we unfortunaely cannot use st-GNN due to a very limited number of complete data
+##we also cannot use oter temporal imputaiton models 
+##to address this issue, I will use DNN that does not require contrinous data
+
+##first I need to generate additonal variables to help DNN to account for seasonality 
+df_combined['Дата'] = pd.to_datetime(df_combined['Дата'])
+df_combined['Day'] = df_combined['Дата'].dt.day
+df_combined['Month'] = df_combined['Дата'].dt.month
+df_combined['Year'] = df_combined['Дата'].dt.year   
+df_combined
+
+#%%
+df_combined = df_combined.dropna()
+df_combined
+
+#excellent, we have 867 complete rows to train our model
+#it turns out it is a bad idea because we still do not have enough values for prediciton 
+
+#%%
+#let us instead see what weather values we can use to predict precipation 
+
+#%%
+#we need to drop the date column 
+df_combined = df_combined.drop(columns = ['Дата'])
+
+
+#%%
+#import the necessary libraries
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+
+#%%
+df = df_combined
+##build the model architecture 
+X = df[['Амангельды', 'Улытау', 'Тасты-Талды', 'Аркалык', 'Day', 'Month', 'Year']]
+Y = df['Екидин']
+
+# Split data into train and test sets
+X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+
+# Feature Scaling
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+### 2. **Model Building**
+
+# Build the neural network model
+model = Sequential()
+model.add(Dense(64, input_dim=X_train.shape[1], activation='relu'))  # Input layer and 1st hidden layer
+model.add(Dense(32, activation='relu'))  # 2nd hidden layer
+model.add(Dense(1, activation='linear'))  # Output layer
+
+# Compile the model
+model.compile(optimizer='adam', loss='mean_squared_error')
+
+#%%
+#train the model 
+model.fit(X_train, Y_train, epochs=100, batch_size=60, verbose=1)
+
+#%%
+#for some reason, running this command in the terminal did not work, but running it here resolved the error 
+!pip3 install --user pandas openpyxl
+
+# %%
+#let us open the df with all meteo and hydro data 
+df_hydro_ice = pd.read_csv("/Users/zhuldyzualikhankyzy/Documents/GitHub/flood_prediciton/data/ekidin_hydro_ice.csv")
+df_hydro_ice.columns = ['station', 'date', 'average', 'min', 'soil_tempaverage', 'soil_tempmax', 'soil_tempmin', 'air_tempaverage', 'air_tempmax', 'air_tempmin', 'pressureat station level', 'pressureat sea level', 'dew_pointmin', 'snow_cover_depth', 'snow_height_cm', 'def_nasaverage', 'def_nasmax', 'precipitationtotal', 'windaverage', 'windmax from 8 terms', 'windabs max', 'part_pressaverage']
+df_hydro_ice['date'] = pd.to_datetime(df_hydro_ice['date'], errors='coerce')
+df_hydro_ice['date'] = df_hydro_ice['date'].astype(str)
+df_water = pd.read_csv("/Users/zhuldyzualikhankyzy/Documents/GitHub/flood_prediciton/data/ekidin_water_level_discharge.csv")
+df_total = df_hydro_ice.merge(df_water, on = "date", how = "inner")
+df_total['date'] = pd.to_datetime(df_total['date'], errors='coerce')
+df_total['day'] = df_total['date'].dt.day
+df_total['month'] = df_total['date'].dt.month
+df_total['year'] = df_total['date'].dt.year
+df_total
+
+#%% 
+#replace the bad values with nan 
+df_total['discharge'] = pd.to_numeric(df_total['discharge'], errors='coerce')
+# %%
+nan_count = df_total['discharge'].isnull().sum()
+print("Number of NaN values:", nan_count)
+
+# %%
+zero_count = (df_total['discharge'] == 0).sum()
+print("Number of 0 values:", zero_count)
+
+#%%
+#the previous observation confrims the general proceudre for water discharge records 
+# "нб" stands for no or 0 discharge
+df_total['discharge'].fillna(0, inplace=True)
+df_total
+
+#%%
+#drop the symbol column 
+df_total = df_total.drop(columns = ['symbol'])
+
+#%%
+#save the df with all the variables as a new csv file
+df_total.to_csv("/Users/zhuldyzualikhankyzy/Documents/GitHub/flood_prediciton/data/ekidin_total.csv", index =False, header = True)
+# %%
