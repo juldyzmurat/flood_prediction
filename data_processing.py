@@ -342,11 +342,12 @@ df_combined = df_combined.drop(columns = ['Дата'])
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-
+from tensorflow.keras.layers import Dense, Dropout 
+from tensorflow.keras.optimizers import Adam 
+from joblib import dump,load
 #%%
 df = df_combined
 ##build the model architecture 
@@ -418,4 +419,167 @@ df_total = df_total.drop(columns = ['symbol'])
 #%%
 #save the df with all the variables as a new csv file
 df_total.to_csv("/Users/zhuldyzualikhankyzy/Documents/GitHub/flood_prediciton/data/ekidin_total.csv", index =False, header = True)
+# %%
+#load the dataframe
+df = pd.read_csv("/Users/zhuldyzualikhankyzy/Documents/GitHub/flood_prediciton/data/ekidin_total.csv")
+df = df.drop(["station","date","symbol"],axis=1)
+#clean from white spaces 
+df.replace('\*', '', regex=True, inplace=True)
+df.replace(' ', '', regex=True, inplace=True)
+df.replace({'-':np.nan},regex=False, inplace=True)
+df = df.dropna()
+df
+# %%
+#turn into numerical values 
+df = df.apply(pd.to_numeric)
+df
+# %%
+X = df.copy()
+X = X.drop("precipitationtotal",axis=1)
+Y = df['precipitationtotal']
+
+
+# Split data into train and test sets
+X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+
+# Feature Scaling
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+### 2. **Model Building**
+
+# Build the neural network model
+model = Sequential()
+model.add(Dense(64, input_dim=X_train.shape[1], activation='relu'))  # Input layer and 1st hidden layer
+model.add(Dense(32, activation='relu'))  # 2nd hidden layer
+model.add(Dense(1, activation='linear'))  # Output layer
+
+# Compile the model
+model.compile(optimizer='adam', loss='mean_squared_error')
+model.fit(X_train, Y_train, epochs=100, batch_size=20, verbose=1)
+
+# %%
+#test the model 
+y_pred = model.predict(X_test)
+y_pred[y_pred<0]=0 
+y_pred
+# %%
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(10,5))
+plt.plot([x for x in range(len(Y_test))],Y_test.values,label = "ground",marker ='o')
+plt.plot([x for x in range(len(Y_test))],y_pred,label = "pred",marker ='x')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# %%
+#the predoicitons do not seem to be following the pattern 
+#let's see what variables have more correlation with the percipitation column 
+#first, let's drop the station_name 
+import seaborn as sns 
+df = pd.read_csv("/Users/zhuldyzualikhankyzy/Documents/GitHub/flood_prediciton/data/ekidin_total.csv")
+df = df.drop(["station","date","symbol","station_code"],axis=1)
+#clean from white spaces 
+df.replace('\*', '', regex=True, inplace=True)
+df.replace(' ', '', regex=True, inplace=True)
+df.replace({'-':np.nan},regex=False, inplace=True)
+df.to_csv("final_features.csv")
+corr_matrix = df.corr()
+plt.figure(figsize=(10,8))
+sns.heatmap(corr_matrix,annot=False, cmap = "coolwarm",fmt=".2f")
+plt.show()
+# %%
+filtered_corr_matrix = corr_matrix[(corr_matrix['precipitationtotal'] > 0.25) | (corr_matrix['precipitationtotal'] < -0.25)]
+filtered_corr_matrix
+#%%
+#now we see the columns that have greater than 0.25 correlation or less that -0.25 correlation 
+#let's retrain the model 
+# correlated_percip_df = df.copy()
+# correlated_percip_df = correlated_percip_df.dropna()
+# correlated_percip_df = correlated_percip_df[['soil_tempmin','air_tempmin','pressureat station level','pressureat sea level','dew_pointmin','precipitationtotal','part_pressaverage','day','month','year']]
+
+# X = correlated_percip_df[['soil_tempmin','air_tempmin','pressureat station level','pressureat sea level','dew_pointmin','part_pressaverage','day','month','year']]
+# Y = correlated_percip_df['precipitationtotal']
+
+df = df.dropna()
+X = df.copy()
+X = X.drop("precipitationtotal",axis=1)
+Y = df['precipitationtotal']
+# Y = np.log1p(Y)
+
+
+# Split data into train and test sets
+X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+
+# Feature Scaling
+scaler = RobustScaler()
+X_train = scaler.fit_transform(X_train)
+dump(scaler,'scaler.joblib')
+X_test = scaler.transform(X_test)
+# Y_train = Y_train.values.reshape(-1,1)
+# Y_train = scaler.fit_transform(Y_train)
+# Y_test = Y_test.values.reshape(-1,1)
+# Y_test = scaler.transform(Y_test)
+
+### 2. **Model Building**
+# Build the neural network model
+model = Sequential()
+model.add(Dense(64, input_dim=X_train.shape[1], activation='relu'))  # Input layer and 1st hidden layer
+model.add(Dropout(0.5))
+model.add(Dense(32, activation='relu'))  # 2nd hidden layer
+model.add(Dropout(0.5))
+model.add(Dense(1, activation='relu'))  # Output layer
+
+# Compile the model
+optimizer = Adam(learning_rate=0.001)
+model.compile(optimizer=optimizer, loss='mean_squared_error')
+model.fit(X_train, Y_train, epochs=200, batch_size=30, verbose=1)
+
+#test the model 
+y_pred = model.predict(X_test)
+y_pred
+# %%
+#turns out that the removing columns except for the "station","date","symbol","station_code" does not affect the model's learnings 
+#let's see the predictions 
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(10,5))
+plt.plot([x for x in range(len(Y_test))],Y_test,label = "ground",marker ='o')
+plt.plot([x for x in range(len(Y_test))],y_pred,label = "pred",marker ='x')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Assuming `transformed_values` is your data transformed with log1p
+
+# %%
+#now we want to fill in the missing percipiation data using this DNN 
+#first let's check how many nan values there are 
+df = pd.read_csv("/Users/zhuldyzualikhankyzy/Documents/GitHub/flood_prediciton/final_features.csv",index_col=0)
+#"-" in snow height means no snow because all the following values after are 0 and it also coincides with the flood event caused by rapid melt of snow 
+df['snow_height_cm'].fillna(0,inplace=True)
+df.isnull().sum()
+
+
+#find the rows with NaN percip 
+nan_rows = df['precipitationtotal'].isna()
+X_miss = df.loc[nan_rows,['average', 'min', 'soil_tempaverage', 'soil_tempmax', 'soil_tempmin',
+       'air_tempaverage', 'air_tempmax', 'air_tempmin',
+       'pressureat station level', 'pressureat sea level', 'dew_pointmin',
+       'snow_cover_depth', 'snow_height_cm', 'def_nasaverage', 'def_nasmax','windaverage', 'windmax from 8 terms',
+       'windabs max', 'part_pressaverage', 'water_level', 'discharge', 'day',
+       'month', 'year']]
+scaler = load('scaler.joblib')
+X_miss = scaler.fit_transform(X_miss)
+filled_miss = model.predict(X_miss)
+df.loc[nan_rows,'precipitationtotal'] = filled_miss
+
+df.isnull().sum()
+
+#save is csv 
+df.to_csv("final_features_imputed.csv",index =False, header = True)
+
+
 # %%
