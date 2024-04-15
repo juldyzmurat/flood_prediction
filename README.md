@@ -1,6 +1,6 @@
 # Flood Prediciton using meteo- and hydro- data in Ekidin station, Kostanay, Kazakhstan 
 
-This project predicts water levels in Ekidin station, Kostanay Resion, Kazakhstan bases on meteo and hydro data from 2014-01-01 until 12-31-2020. 
+This project predicts water levels in Ekidin station, Kostanay Resion, Kazakhstan based on meteo and hydro data from 2014-01-01 until 2020-12-31. 
 The project was motivated by National Flood Crisis that has been taking place in Kazakhstan since March 29th, 2024. 
 
 ## Data
