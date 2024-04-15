@@ -905,3 +905,16 @@ plt.grid(False)
 plt.show()
 
 # %%
+#plot the historical data of water level 
+start_date = '2014-01-01'
+end_date = '2021-12-31'
+# Filter the dataframe to include only the desired period
+desired_period2= df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+
+plt.figure(figsize=(10,5))
+plt.plot(desired_period2['date'], desired_period2['water_level'], label='Historical Water Level', color='green')
+plt.title("Historical data showing water levels recorded from Ekidin station between January 1st 2014 and December 31st of 2021")
+plt.legend()
+plt.grid(False)
+plt.show()
+# %%
