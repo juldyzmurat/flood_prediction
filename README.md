@@ -51,7 +51,7 @@ The key Python packages used in this project are:
 2. **Imputation**: Hydro data had very little missingness that was imputed through finding the average of neighboring dates or filled in with 0 based on the nature of missing point. Meteo data was mostly imputed in the same fashion. Precipitation data had large periods of missingness that was imputed using a Deep Learning Model trained on non-temporal weather attributes. 
 4. **Feature generation**: Additonal features were generated through aggregation functions and sliding windows 
 5. **Train Test Split**: 80-20 stratified split based on continous period to form training and testing sets
-   [Historical water levels in Ekidin station for the time period chosen for this exploration](figures/historical_water_levels.png) 
+   ![Historical water levels in Ekidin station for the time period chosen for this exploration](figures/historical_water_levels.png) 
 
 ## Modeling
 
@@ -84,7 +84,7 @@ On the other hand, the time series forecast model, even when using in-sample tes
 
 Overall, although these approaches are simplified, they still function as viable tools for flood prediction up to seven days in advance. In the future, integrating Sentinel data with geographic information systems (geogifs) could enhance prediction accuracy through a combination of machine learning and physical models.
 
-![Time Series Forecast, Multi-output Regression Results along with Historical values of water levels](figures/multi-target-models-comparison.png) 
+![Time Series Forecast, Multi-output Regression Results along with Historical values of water levels](figures/multi-time-series.png) 
 
 ## Status 
 Project is: complete
