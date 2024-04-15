@@ -583,3 +583,325 @@ df.to_csv("final_features_imputed.csv",index =False, header = True)
 
 
 # %%
+#component 1 
+#regression model to predict the water levels
+#load data 
+import numpy as np 
+import pandas as pd 
+
+df = pd.read_csv("final_features_imputed.csv")
+#we need two columns discharge and water level 
+df['date'] = df['year'].astype(str) + "-" + df['month'].astype(str) + "-" + df['day'].astype(str)
+df['date'] = pd.to_datetime(df['date'])
+df = df[['date','discharge','water_level','month']]
+
+df = df.set_index('date').sort_index()
+
+df['water_level_1day'] = df['water_level'].shift()
+df['water_level_2day'] = df['water_level'].shift(2)
+df['water_level_3day'] = df['water_level'].shift(3)
+df['water_level_4day'] = df['water_level'].shift(4)
+df['water_level_5day'] = df['water_level'].shift(5)
+df['water_level_6day'] = df['water_level'].shift(6)
+df['water_level_7day'] = df['water_level'].shift(7)
+
+df = df.dropna()
+df
+
+# %%
+from sklearn.model_selection import train_test_split
+df_train = df[:int(len(df)*0.8)]
+df_test = df[int(len(df)*0.8):]
+
+#%%
+##!pip install -f http://h2o-release.s3.amazonaws.com/h2o/latest_stable_Py.html h2o --user
+# %%
+#now we begin using h2o 
+import h2o
+from h2o.automl import H2OAutoML
+h2o.init()
+
+h2o_frame = h2o.H2OFrame(df_train)
+x = h2o_frame.columns
+y = 'water_level'
+x.remove(y)
+# %%
+h2o_automl = H2OAutoML(sort_metric='mse', max_runtime_secs=5*60, seed=42)
+h2o_automl.train(x=x, y=y, training_frame=h2o_frame)
+# %%
+#retrive the best model and save it
+best_model = h2o_automl.leader
+model_path = h2o.save_model(model=best_model, path="./models/time_series_forecast/", force=True)
+
+#%%
+# #component 2
+#multi-output regression model to predict the water levels based on meteo data 
+#generate new features 
+#found an error in naming columns, let's fix it
+df = pd.read_csv("final_features_imputed.csv")
+df.columns = ['humid_average', 'humid_min', 'soil_tempaverage', 'soil_tempmax', 'soil_tempmin',
+       'air_tempaverage', 'air_tempmax', 'air_tempmin',
+       'pressureat station level', 'pressureat sea level', 'dew_pointmin',
+       'snow_cover_depth', 'snow_height_cm', 'def_nasaverage', 'def_nasmax',
+       'precipitationtotal', 'windaverage', 'windmax from 8 terms',
+       'windabs max', 'part_pressaverage', 'water_level', 'discharge', 'day',
+       'month', 'year']
+df.to_csv("final_features_imputed.csv",index =False, header = True)
+
+#%%
+##now let's aggregate the features 
+#function for aggregation 
+def days_agg(dataframe: pd.DataFrame, column_name: str, agg_func: str, days: int):
+
+    d = {
+        'mean': np.mean,
+        'sum': np.sum,
+        'std': np.std,
+        'amplitude': lambda x: np.max(x) - np.min(x),
+        'first_and_last': lambda x: x[0] - x[-1],
+    }
+
+    agg_f = d[agg_func]
+    values = np.array(dataframe[column_name])
+    result = []
+
+    for i in range(0, len(values)):
+        i_ = i - days
+        if i_ < 0:
+            i_ = 0
+
+        result.append(agg_f(values[i_:i + 1]))
+
+    return result
+
+#funciton that calls aggregation at once for all columns 
+def feature_aggregation(dataframe: pd.DataFrame):
+    columns = dataframe.columns
+    columns_drop = []
+
+    if 'discharge' in columns:
+        # Расход - среднее за 7 суток
+        dataframe['discharge_mean7'] = days_agg(dataframe, 'discharge', 'mean', 7)
+    if 'humid_average' in columns:
+        # Целевая переменная - среднее и амплитуда за 7 и 3 суток
+        dataframe['humid_average_ampl7'] = days_agg(dataframe, 'humid_average', 'amplitude', 7)
+        dataframe['humid_average_mean3'] = days_agg(dataframe, 'humid_average', 'mean', 4)
+    if 'snow_cover_depth' in columns:
+        # Доля снежного покрова - амплитуда за 30 суток
+        dataframe['snow_cover_depth_ampl30'] = days_agg(dataframe, 'snow_cover_depth', 'amplitude', 30)
+    if 'snow_height_cm' in columns:
+        # Высота снежного покрова
+        dataframe['snow_height_cm_mean15'] = days_agg(dataframe, 'snow_height_cm', 'mean', 15)
+        dataframe['snow_height_cm_diff30'] = days_agg(dataframe, 'snow_height_cm', 'first_and_last', 30)
+    if 'precipitationtotal' in columns:
+        # Сумма осадков за 20 суток
+        dataframe['precipitation_sum20'] = days_agg(dataframe, 'precipitationtotal', 'sum', 20)
+    
+
+    dataframe.drop(columns_drop, axis=1, inplace=True)
+
+    return dataframe
+
+# %%
+df = pd.read_csv("final_features_imputed.csv")
+df = feature_aggregation(df)
+
+#create lagging variables for the 7 day prediction 
+for i in range(1, 8):
+    df[f'target_day_{i}'] = df['water_level'].shift(-i)
+    
+#drop the first 20 days due to aggregation 
+df = df[20:]
+#drop the last 7 days because they don't have targets 
+df = df[:-7]
+# %%
+#import the neccessary varaibles 
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+from sklearn import datasets
+from sklearn.model_selection import train_test_split
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.linear_model import ElasticNet
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+# %%
+X = df.drop(['target_day_1', 'target_day_2', 'target_day_3', 'target_day_4', 'target_day_5', 'target_day_6', 'target_day_7'], axis=1)
+Y = df[['target_day_1', 'target_day_2', 'target_day_3', 'target_day_4', 'target_day_5', 'target_day_6', 'target_day_7']]
+
+X_train = X[:int(len(X)*0.8)]
+X_test = X[int(len(X)*0.8):]
+Y_train = Y[:int(len(Y)*0.8)]
+Y_test = Y[int(len(Y)*0.8):]
+# Create and train the multi-target regression model (ElasticNet)
+multioutput_model = MultiOutputRegressor(
+    ElasticNet(alpha=0.5, l1_ratio=0.5), n_jobs=7)
+multioutput_model.fit(X_train, Y_train)
+
+# Create and train the decision tree regressor model
+tree_model = DecisionTreeRegressor(random_state=42)
+tree_model.fit(X_train, Y_train)
+
+# Create and train the random forest regressor model
+forest_model = RandomForestRegressor(n_estimators=100, random_state=42)
+forest_model.fit(X_train, Y_train)
+# %%
+#let's plot the prections 
+# Make predictions
+multioutput_pred = multioutput_model.predict(X_test)
+tree_pred = tree_model.predict(X_test)
+forest_pred = forest_model.predict(X_test)
+
+# Calculate performance metrics for multioutput model
+multioutput_mse = mean_squared_error(Y_test, multioutput_pred)
+multioutput_mae = mean_absolute_error(Y_test, multioutput_pred)
+
+# Calculate performance metrics for decision tree model
+tree_mse = mean_squared_error(Y_test, tree_pred)
+tree_mae = mean_absolute_error(Y_test, tree_pred)
+
+# Calculate performance metrics for random forest model
+forest_mse = mean_squared_error(Y_test, forest_pred)
+forest_mae = mean_absolute_error(Y_test, forest_pred)
+
+# Print the performance metrics
+print("Multioutput Model - Mean Squared Error:", multioutput_mse)
+print("Multioutput Model - Mean Absolute Error:", multioutput_mae)
+print("Decision Tree Model - Mean Squared Error:", tree_mse)
+print("Decision Tree Model - Mean Absolute Error:", tree_mae)
+print("Random Forest Model - Mean Squared Error:", forest_mse)
+print("Random Forest Model - Mean Absolute Error:", forest_mae)
+
+# %%
+#let's visualze the results 
+# Create a comparative visualization
+plt.figure(figsize=(10, 4))
+models = ['Multioutput', 'Decision Tree', 'Random Forest']
+mse_scores = [multioutput_mse, tree_mse, forest_mse]
+mae_scores = [multioutput_mae, tree_mae, forest_mae]
+
+# Plot Mean Squared Error (MSE)
+plt.subplot(1, 2, 1)
+plt.bar(models, mse_scores, color=['blue', 'green', 'purple'])
+plt.xlabel('Models')
+plt.ylabel('Mean Squared Error (MSE)')
+plt.title('Comparative MSE Scores')
+
+# Plot Mean Absolute Error (MAE)
+plt.subplot(1, 2, 2)
+plt.bar(models, mae_scores, color=['blue', 'green', 'purple'])
+plt.xlabel('Models')
+plt.ylabel('Mean Absolute Error(MAE)')
+plt.title('Comparative MAE Scores')
+
+plt.tight_layout()
+plt.show()
+# %%
+#from the results of model training we can see that it's better to use MultiOutputRegressor model 
+#let's compare the resutls of time-series forcasting and MultiOutputRegressor forecasting 
+
+#floods usually happen in spring
+#hence, we want to choose the February-Match windwow for out visualization 
+import matplotlib.pyplot as plt
+df['date'] = df['year'].astype(str) + "-" + df['month'].astype(str) + "-" + df['day'].astype(str)
+df['date'] = pd.to_datetime(df['date'])
+pltdf = df[(df['date']>='2020-3-20') & (df['date']<'2020-3-27')]
+pltdf
+plt.figure(figsize=(10,5))
+plt.plot(pltdf['date'],pltdf['water_level'],label = "water level",marker ='o',)
+
+plt.title("Change in water level recorded by Ekidin  station between February 1st and March 31st of 2020")
+plt.legend()
+plt.grid(False)
+plt.show()
+
+#%%
+#from the plot, we see that this time period includes an event of flood 
+# although our data is not labelled by flood events, we can see such an event from the graph and the news archive
+#the flood happened on 2020-03-24 
+#therefore, we use the date of 21 days around the event of flood
+
+#get the prediciton of time series 
+import numpy as np
+model = h2o.load_model("/Users/zhuldyzualikhankyzy/Documents/GitHub/flood_prediciton/models/time_series_forecast/GBM_grid_1_AutoML_1_20240415_115845_model_64")
+regression = pd.DataFrame()
+regression['date'] = pd.date_range(start='2020-03-17',periods=21)
+regression['date'] = pd.to_datetime(regression['date'])
+
+df_reg = df.copy()
+df_reg['water_level_1day'] = df_reg['water_level'].shift()
+df_reg['water_level_2day'] = df_reg['water_level'].shift(2)
+df_reg['water_level_3day'] = df_reg['water_level'].shift(3)
+df_reg['water_level_4day'] = df_reg['water_level'].shift(4)
+df_reg['water_level_5day'] = df_reg['water_level'].shift(5)
+df_reg['water_level_6day'] = df_reg['water_level'].shift(6)
+df_reg['water_level_7day'] = df_reg['water_level'].shift(7)
+multimodel_X = regression.merge(df_reg,on="date",how='inner')
+multimodel_X =multimodel_X[['discharge', 'month', 'water_level_1day', 'water_level_2day', 'water_level_3day', 'water_level_4day', 'water_level_5day', 'water_level_6day', 'water_level_7day']]
+h2o.init()
+
+h2o_frame = h2o.H2OFrame(multimodel_X)
+
+pred_21days = model.predict(h2o_frame)
+
+
+#%%
+df['date'] = df['year'].astype(str) + "-" + df['month'].astype(str) + "-" + df['day'].astype(str)
+df['date'] = pd.to_datetime(df['date'])
+#get the predicitons of MultiOutputRegressor
+#define the dates 
+#since we want to make predciton for 7 days, we will chose the first 21 days of test set 
+multimodel = pd.DataFrame()
+
+#we will do in-sample prediciton for 21 days, (use 3 points that generate 7 precitions each)
+multioutput_pred = []
+
+start_dates = ['2020-03-17','2020-03-24','2020-03-31']
+
+for start_date in start_dates: 
+    multimodel['date'] = pd.date_range(start=start_date,periods=1)
+    multimodel['date'] = pd.to_datetime(multimodel['date'])
+
+    multimodel_X = multimodel.merge(df,on="date",how='inner')
+    multimodel_X = multimodel_X.drop(['target_day_1', 'target_day_2', 'target_day_3', 'target_day_4', 'target_day_5', 'target_day_6', 'target_day_7','date'], axis=1)
+    multimodel_X = multimodel_X.apply(lambda x: pd.to_numeric(x, errors='ignore'))
+
+    multioutput_pred.append(multioutput_model.predict(multimodel_X.values.reshape(1,-1)))
+
+
+#%%
+#plot the data 
+import matplotlib.pyplot as plt
+
+start_date = '2020-02-01'
+end_date = '2020-04-07'
+# Filter the dataframe to include only the desired period
+desired_period= df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+
+
+# Define the start and end dates of the desired period
+start_date = '2020-03-18'
+end_date = '2020-04-07'
+# Filter the dataframe to include only the desired period
+desired_period2= df[(df['date'] >= start_date) & (df['date'] <= end_date)]
+
+
+
+multioutput_pred = np.concatenate([x.flatten() for x in multioutput_pred])
+
+
+# Plot the data for the desired period
+plt.figure(figsize=(10,5))
+plt.plot(desired_period['date'], desired_period['water_level'], label='Historical Water Level', color='green')
+plt.plot(desired_period2['date'], multioutput_pred, label='MultiOutputRegressor', color='blue')
+plt.plot(desired_period2['date'], pred_21days['predict'].as_data_frame(), label='LinearRegression', color='red')
+
+plt.title("Change in water level recorded by Ekidin station between February 1st and March 31st of 2020")
+plt.legend()
+plt.grid(False)
+plt.show()
+
+# %%
